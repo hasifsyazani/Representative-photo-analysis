@@ -1,0 +1,206 @@
+#Bag of Visual Words (BoVW)
+import import_ipynb
+import startup
+
+import numpy as np
+import cv2
+import os
+from scipy import ndimage
+from scipy.spatial import distance
+from sklearn.cluster import KMeans
+
+# takes all images and convert them to grayscale. 
+# return a dictionary that holds all images category by category. 
+def load_images_from_folder(folder):
+    images = {}
+    for filename in os.listdir(folder):
+        category = []
+        path = folder + "/" + filename
+        for cat in os.listdir(path):
+            img = cv2.imread(path + "/" + cat,0)
+            #img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            if img is not None:
+                category.append(img)
+        images[filename] = category
+    return images
+
+images = load_images_from_folder('dataset/bukit')  # take all images category by category 
+
+# read images in folder as array
+def load_images_as_arrays(folder):
+    images = []
+    for filename in os.listdir(folder):
+        img = cv2.imread(os.path.join(folder,filename))
+        if img is not None:
+            images.append(img)
+    return images
+
+images2 = load_images_as_arrays('dataset/bukit/bukit_tresek')
+
+# display all images in folder
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+
+def display_images(folder, images):
+    for filename in os.listdir(folder):
+        image = mpimg.imread(os.path.join(folder,filename))
+        plt.imshow(image, interpolation='nearest')
+        plt.show()
+        
+display_images('dataset/bukit/bukit_tresek', images2)
+
+# Creates descriptors using sift 
+# Takes one parameter that is images dictionary
+# Return an array whose first index holds the decriptor_list without an order
+# And the second index holds the sift_vectors dictionary which holds the descriptors but this is seperated class by class
+def sift_features(images):
+    sift_vectors = {}
+    descriptor_list = []
+    sift = cv2.xfeatures2d.SIFT_create()
+    for key,value in images.items():
+        features = []
+        for img in value:
+            kp, des = sift.detectAndCompute(img,None)          
+            descriptor_list.extend(des)
+            features.append(des)
+        sift_vectors[key] = features
+    return [descriptor_list, sift_vectors]
+
+sifts = sift_features(images) 
+# Takes the descriptor list which is unordered one
+descriptor_list = sifts[0] 
+# Takes the sift features that is seperated class by class for train data
+all_bovw_feature = sifts[1] 
+# Takes the sift features that is seperated class by class for test data
+#test_bovw_feature = sift_features(test)[1] 
+
+# Getting the length of descriptor 
+len(descriptor_list)
+
+import matplotlib.pyplot as plt
+%matplotlib inline
+import os
+
+def show_images_from_folder(folder):
+    for filename in os.listdir(folder):
+        img1 = cv2.imread(os.path.join(folder,filename))
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        sift = cv2.xfeatures2d.SIFT_create()
+        keypoints_1, descriptors_1 = sift.detectAndCompute(img1,None)
+        img_1 = cv2.drawKeypoints(gray1,keypoints_1,img1)
+        plt.imshow(img_1, interpolation='nearest')
+        plt.show()
+
+img_ex = show_images_from_folder('dataset/bukit/bukit_tresek')
+
+# A k-means clustering algorithm who takes 2 parameter which is number 
+# of cluster(k) and the other is descriptors list(unordered 1d array)
+# Returns an array that holds central points.
+from sklearn.decomposition import PCA
+def kmeans(k, descriptor_list):
+    kmeans = KMeans(n_clusters = k, n_init=10)
+    kmeans.fit(descriptor_list)
+    visual_words = kmeans.cluster_centers_ 
+    pca = PCA(2)
+    df = pca.fit_transform(descriptor_list)
+    label = kmeans.fit_predict(df)
+    return [visual_words, label]
+    
+# Takes the central points which is visual words    
+visual_words = kmeans(150, descriptor_list)[0] 
+#label = kmeans(150, descriptor_list)[1] 
+
+# Getting the visual words size
+visual_words.size
+
+# Find the index of the closest central point to the each sift descriptor. 
+# Takes 2 parameters the first one is a sift descriptor and the second one is the array of central points in k means
+# Returns the index of the closest central point.  
+def find_index(image, center):
+    count = 0
+    ind = 0
+    for i in range(len(center)):
+        if(i == 0):
+             count = distance.euclidean(image, center[i]) 
+             #count = L1_dist(image, center[i])
+        else:
+            dist = distance.euclidean(image, center[i]) 
+            #dist = L1_dist(image, center[i])
+            if(dist < count):
+                ind = i
+                count = dist
+    return ind
+    
+ # Takes 2 parameters. The first one is a dictionary that holds the descriptors that are separated class by class 
+# And the second parameter is an array that holds the central points (visual words) of the k means clustering
+# Returns a dictionary that holds the histograms for each images that are separated class by class. 
+def image_class(all_bovw, centers):
+    dict_feature = {}
+    for key,value in all_bovw.items():
+        category = []
+        for img in value:
+            histogram = np.zeros(len(centers))
+            for each_feature in img:
+                ind = find_index(each_feature, centers)
+                histogram[ind] += 1
+            category.append(histogram)
+        dict_feature[key] = category
+    return category
+    
+# Creates histograms for train data    
+bovw = image_class(all_bovw_feature, visual_words) 
+# Creates histograms for test data
+#bovw_test = image_class(test_bovw_feature, visual_words) 
+for i in range(len(bovw)):
+    plt.hist(bovw[i], bins=30)    
+    plt.title("Frequency Histogram")
+    plt.xlabel("Visual Vocabulary")
+    plt.ylabel("Frequency")
+    plt.show()
+    
+# density and histogram plots
+from sklearn.manifold import MDS
+import seaborn as sns
+
+def density_plots(list):
+    for i in range(len(bovw)):
+        embedding = MDS(n_components=1)
+        pop = bovw[i].reshape(-1,1)
+        X_transformed = embedding.fit_transform(pop[:100])
+        sns.distplot(X_transformed, hist=True, kde=True, bins=20, color = 'red', hist_kws={'edgecolor':'black'}, kde_kws={'linewidth': 3})
+        plt.xlabel('Reduced data dimension')
+        plt.title('Kernel Density Estimation')
+        plt.show()
+            
+density_plots(bovw)
+
+from sklearn.manifold import MDS
+from scipy import stats
+from scipy.stats import norm
+import operator
+
+def mds_and_pdf():
+    for i in range(len(bovw)):
+        embedding = MDS(n_components=1)
+        pop = bovw[i].reshape(-1,1)
+        X_transformed = embedding.fit_transform(pop[:100])
+        probability = stats.norm.pdf(X_transformed)
+        print("Photo",i,"pdf",probability[i])
+    index, value = max(enumerate(probability), key=operator.itemgetter(1))
+    max_pdf = probability.max()
+    index2, value2 = min(enumerate(probability), key=operator.itemgetter(1))
+    min_pdf = probability.min()
+    return [max_pdf, index, min_pdf, index2]
+
+max_pdf = mds_and_pdf()[0]
+index = mds_and_pdf()[1]
+min_pdf = mds_and_pdf()[2]
+index2 = mds_and_pdf()[3]
+
+print("The highest pdf is photo", index,":",max_pdf)
+plt.imshow(images2[index], interpolation='nearest')
+plt.show()
+
+print("The lowest pdf is photo", index2,":", min_pdf)
+plt.imshow(images2[index2], interpolation='nearest')
+plt.show()
